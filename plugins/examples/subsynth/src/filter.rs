@@ -1,12 +1,13 @@
 use nih_plug::params::enums::{Enum, EnumParam};
 use enum_iterator::Sequence;
 
+#[derive(Debug, Clone)]
 pub trait Envelope {
     fn get_value(&mut self, dt: f32) -> f32;
     fn trigger(&mut self);
     fn release(&mut self);
 }
-
+#[derive(Debug, Clone)]
 pub struct ADSREnvelope {
     attack: f32,
     decay: f32,
@@ -16,7 +17,8 @@ pub struct ADSREnvelope {
     time: f32,
 }
 
-enum ADSREnvelopeState {
+#[derive(Debug, PartialEq)]
+pub enum ADSREnvelopeState {
     Idle,
     Attack,
     Decay,
@@ -50,6 +52,18 @@ impl ADSREnvelope {
 
     pub fn set_release(&mut self, release: f32) {
         self.release = release;
+    }
+    pub fn get_state(&self) -> ADSREnvelopeState {
+        self.state
+    }
+    pub fn previous_value(&self) -> f32 {
+        match self.state {
+            ADSREnvelopeState::Idle => 0.0,
+            ADSREnvelopeState::Attack => self.time / self.attack,
+            ADSREnvelopeState::Decay => 1.0 - (1.0 - self.sustain) * (self.time / self.decay),
+            ADSREnvelopeState::Sustain => self.sustain,
+            ADSREnvelopeState::Release => self.sustain * (1.0 - (self.time / self.release)),
+        }
     }
 }
 

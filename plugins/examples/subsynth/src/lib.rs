@@ -9,7 +9,7 @@ use std::sync::Arc;
 use waveform::Waveform;
 use waveform::generate_waveform;
 use filter::{NotchFilter, BandpassFilter, HighpassFilter, LowpassFilter, StatevariableFilter};
-use filter::{Filter, FilterType, FilterFactory, Envelope, ADSREnvelope};
+use filter::{Filter, FilterType, FilterFactory, Envelope, ADSREnvelope, ADSREnvelopeState};
 
 use filter::generate_filter;
 
@@ -80,7 +80,7 @@ struct Voice {
     phase: f32,
     phase_delta: f32,
     releasing: bool,
-    amp_envelope: Smoother<f32>,
+    amp_envelope: ADSREnvelope,
     voice_gain: Option<(f32, Smoother<f32>)>,
     filter_cut_envelope: Smoother<f32>,
     filter_res_envelope: Smoother<f32>,
@@ -355,10 +355,10 @@ impl Plugin for SubSynth {
                                 velocity,
                             } => {
                                 let initial_phase: f32 = self.prng.gen();
-                                let attack_time = self.params.amp_attack_ms.value() /1000.0; // Convert attack time to seconds
-                                let decay_time = self.params.amp_decay_ms.value() /1000.0; // Convert decay time to seconds
-                                let sustain_level = self.params.amp_sustain_level.value()/10.0;
-                                let release_time = self.params.amp_release_ms.value() /1000.0; // Convert release time to seconds
+                                let attack_time = self.params.amp_attack_ms.value() / 1000.0; // Convert attack time to seconds
+                                let release_time = self.params.amp_release_ms.value() / 1000.0; // Convert release time to seconds
+                                let decay_time = self.params.amp_decay_ms.value() / 1000.0; // Convert decay time to seconds
+                                let sustain_level = self.params.amp_sustain_level.value(); // Sustain level (between 0.0 and 1.0)
 
                                 let mut amp_envelope = ADSREnvelope::new(attack_time, decay_time, sustain_level, release_time);
                                 amp_envelope.trigger();
@@ -368,13 +368,8 @@ impl Plugin for SubSynth {
                                 voice.phase = initial_phase;
                                 voice.phase_delta = util::midi_note_to_freq(note) / sample_rate;
 
-                                let amp_envelope_value = amp_envelope.get_value(0.0); // Get the initial value of the envelope
-                                let smoothed_envelope = Smoother::new(SmoothingStyle::Exponential(attack_time));
-                                smoothed_envelope.reset(amp_envelope_value);
-                                smoothed_envelope.set_target(sample_rate, 1.0);
+                                voice.amp_envelope = amp_envelope;
 
-                                voice.amp_envelope = smoothed_envelope;
-    
                             }
                             NoteEvent::NoteOff {
                                 timing: _,
@@ -408,16 +403,13 @@ impl Plugin for SubSynth {
                                                 .params
                                                 .gain
                                                 .preview_modulated(normalized_offset);
-                                            let (_, smoother) =
-                                                voice.voice_gain.get_or_insert_with(|| {
-                                                    (
-                                                        normalized_offset,
-                                                        self.params.gain.smoothed.clone(),
-                                                    )
-                                                });
-                                            if voice.internal_voice_id
-                                                >= this_sample_internal_voice_id_start
-                                            {
+                                            let (_, smoother) = voice.voice_gain.get_or_insert_with(|| {
+                                                (
+                                                    normalized_offset,
+                                                    self.params.gain.smoothed.clone(),
+                                                )
+                                            });
+                                            if voice.internal_voice_id >= this_sample_internal_voice_id_start {
                                                 smoother.reset(target_plain_value);
                                             } else {
                                                 smoother.set_target(sample_rate, target_plain_value);
@@ -488,87 +480,91 @@ impl Plugin for SubSynth {
                     }
                     None => &gain,
                 };
-    
-                voice
-                    .amp_envelope
-                    .next_block(&mut voice_amp_envelope, block_len);
-    
-                
-                    for (value_idx, sample_idx) in (block_start..block_end).enumerate() {
-                        let amp = voice.velocity_sqrt * gain[value_idx] * voice_amp_envelope[value_idx];
-                    
-                        // Generate waveform
-                        let waveform = self.params.waveform.value();
-                        let generated_sample = generate_waveform(waveform, voice.phase) * amp;
-                    
-                        // Apply filter
-                        let filter_type = self.params.filter_type.value();
-                        let cutoff = self.params.filter_cut.value();
-                        let resonance = self.params.filter_res.value();
-                        let cutoff_attack = self.params.filter_cut_attack_ms.value();
-                        let cutoff_decay = self.params.filter_cut_decay_ms.value();
-                        let cutoff_sustain = self.params.filter_cut_sustain_ms.value();
-                        let cutoff_release = self.params.filter_cut_release_ms.value();
-                        let resonance_attack = self.params.filter_res_attack_ms.value();
-                        let resonance_decay = self.params.filter_res_decay_ms.value();
-                        let resonance_sustain = self.params.filter_res_sustain_ms.value();
-                        let resonance_release = self.params.filter_res_release_ms.value();
-                        let sample_rate = context.transport().sample_rate;
-                    
-                        let mut filtered_sample = generate_filter(
-                            filter_type,
-                            cutoff,
-                            resonance,
-                            cutoff_attack,
-                            cutoff_decay,
-                            cutoff_sustain,
-                            cutoff_release,
-                            resonance_attack,
-                            resonance_decay,
-                            resonance_sustain,
-                            resonance_release,
-                            generated_sample,
-                            sample_rate,
-                        );
-                        filtered_sample.set_sample_rate(sample_rate);
-                        let processed_sample = filtered_sample.process(generated_sample);
-                    
-                        // Update phase
-                        voice.phase += voice.phase_delta;
-                        if voice.phase >= 1.0 {
-                            voice.phase -= 1.0;
+                    if let ADSREnvelopeState::Idle = amp_envelope.get_state() {
+                        if amp_envelope.get_value(0.0) == 0.0 {
+                            context.send_event(NoteEvent::VoiceTerminated {
+                                timing: block_end as u32,
+                                voice_id: Some(voice.voice_id),
+                                channel: voice.channel,
+                                note: voice.note,
+                            });
+                            self.voices[v.voice_idx] = None;
                         }
-                    
-                        output[0][sample_idx] += processed_sample;
-                        output[1][sample_idx] += processed_sample;
                     }
                     
-                    
-            }
-            // Process voice release and termination
-            for voice in self.voices.iter_mut() {
-                match voice {
-                    Some(v) if v.releasing && v.amp_envelope.previous_value() == 0.0 => {
-                        context.send_event(NoteEvent::VoiceTerminated {
-                            timing: block_end as u32,
-                            voice_id: Some(v.voice_id),
-                            channel: v.channel,
-                            note: v.note,
-                        });
-                        *voice = None;
+                for (value_idx, sample_idx) in (block_start..block_end).enumerate() {
+                    let amp = voice.velocity_sqrt * gain[value_idx] * voice_amp_envelope[value_idx];
+
+                    // Generate waveform
+                    let waveform = self.params.waveform.value();
+                    let generated_sample = generate_waveform(waveform, voice.phase) * amp;
+
+                    // Apply filter
+                    let filter_type = self.params.filter_type.value();
+                    let cutoff = self.params.filter_cut.value();
+                    let resonance = self.params.filter_res.value();
+                    let cutoff_attack = self.params.filter_cut_attack_ms.value();
+                    let cutoff_decay = self.params.filter_cut_decay_ms.value();
+                    let cutoff_sustain = self.params.filter_cut_sustain_ms.value();
+                    let cutoff_release = self.params.filter_cut_release_ms.value();
+                    let resonance_attack = self.params.filter_res_attack_ms.value();
+                    let resonance_decay = self.params.filter_res_decay_ms.value();
+                    let resonance_sustain = self.params.filter_res_sustain_ms.value();
+                    let resonance_release = self.params.filter_res_release_ms.value();
+
+                    let mut filtered_sample = generate_filter(
+                        filter_type,
+                        cutoff,
+                        resonance,
+                        cutoff_attack,
+                        cutoff_decay,
+                        cutoff_sustain,
+                        cutoff_release,
+                        resonance_attack,
+                        resonance_decay,
+                        resonance_sustain,
+                        resonance_release,
+                        generated_sample,
+                        sample_rate,
+                    );
+                    filtered_sample.set_sample_rate(sample_rate);
+                    let processed_sample = filtered_sample.process(generated_sample);
+
+                    // Update phase
+                    voice.phase += voice.phase_delta;
+                    if voice.phase >= 1.0 {
+                        voice.phase -= 1.0;
                     }
-                    _ => (),
+
+                    output[0][sample_idx] += processed_sample;
+                    output[1][sample_idx] += processed_sample;
                 }
             }
-    
+
+            // Process voice termination
+            for (voice_idx, voice) in self.voices.iter_mut().enumerate() {
+                if let Some(voice) = voice {
+                    if let amp_envelope = &mut voice.amp_envelope {
+                        if amp_envelope.get_state() == ADSREnvelopeState::Idle && amp_envelope.previous_value() == 0.0 {
+                            context.send_event(NoteEvent::VoiceTerminated {
+                                timing: block_end as u32,
+                                voice_id: Some(voice.voice_id),
+                                channel: voice.channel,
+                                note: voice.note,
+                            });
+                            self.voices[voice_idx] = None;
+                        }
+                    }
+                }
+            }
+
             block_start = block_end;
             block_end = (block_start + MAX_BLOCK_SIZE).min(num_samples);
         }
-    
+
         ProcessStatus::Normal
     }
 }    
-
 impl SubSynth {
     fn get_voice_idx(&mut self, voice_id: i32) -> Option<usize> {
         self.voices
@@ -590,20 +586,20 @@ impl SubSynth {
             channel,
             note,
             velocity_sqrt: 1.0,
-
+    
             phase: 0.0,
             phase_delta: 0.0,
             releasing: false,
-            amp_envelope: Smoother::none(),
-
+            amp_envelope: ADSREnvelope::new(0.0, 0.0, 0.0, 0.0),
+    
             voice_gain: None,
             filter_cut_envelope: Smoother::new(SmoothingStyle::Linear(0.0)),
             filter_res_envelope: Smoother::new(SmoothingStyle::Linear(0.0)),
-
+    
             filter: None,
         };
         self.next_internal_voice_id = self.next_internal_voice_id.wrapping_add(1);
-
+    
         match self.voices.iter().position(|voice| voice.is_none()) {
             Some(free_voice_idx) => {
                 self.voices[free_voice_idx] = Some(new_voice);
@@ -625,12 +621,13 @@ impl SubSynth {
                         note: oldest_voice.note,
                     });
                 }
-
+    
                 *oldest_voice = Some(new_voice);
                 return oldest_voice.as_mut().unwrap();
             }
         }
     }
+    
 
     fn start_release_for_voices(
         &mut self,
@@ -652,9 +649,8 @@ impl SubSynth {
                     || (channel == *candidate_channel && note == *candidate_note) =>
                 {
                     *releasing = true;
-                    amp_envelope.style =
-                        SmoothingStyle::Exponential(self.params.amp_release_ms.value());
-                    amp_envelope.set_target(sample_rate, 0.0);
+                    amp_envelope.set_release(self.params.amp_release_ms.value() / 1000.0); // Convert release time to seconds
+                    amp_envelope.release();
                     if voice_id.is_some() {
                         return;
                     }
@@ -663,6 +659,7 @@ impl SubSynth {
             }
         }
     }
+    
 
     fn choke_voices(
         &mut self,
