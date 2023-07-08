@@ -468,7 +468,7 @@ impl Plugin for SubSynth {
             let block_len = block_end - block_start;
             let mut gain = [0.0; MAX_BLOCK_SIZE];
             let mut voice_gain = [0.0; MAX_BLOCK_SIZE];
-            let mut voice_amp_envelope = [0.0; MAX_BLOCK_SIZE];
+            let mut voice_amp_envelope = ADSREnvelope::new(self.params.amp_attack_ms.value(), self.params.amp_decay_ms.value(),self.params.amp_sustain_level.value(), self.params.amp_release_ms.value());
             self.params.gain.smoothed.next_block(&mut gain, block_len);
     
             // Process voices
@@ -480,20 +480,20 @@ impl Plugin for SubSynth {
                     }
                     None => &gain,
                 };
-                    if let ADSREnvelopeState::Idle = amp_envelope.get_state() {
-                        if amp_envelope.get_value(0.0) == 0.0 {
+                    if let ADSREnvelopeState::Idle = voice_amp_envelope.get_state() {
+                        if voice_amp_envelope.get_value(0.0) == 0.0 {
                             context.send_event(NoteEvent::VoiceTerminated {
                                 timing: block_end as u32,
                                 voice_id: Some(voice.voice_id),
                                 channel: voice.channel,
                                 note: voice.note,
                             });
-                            self.voices[v.voice_idx] = None;
+                            //self.voices[voice_idx] = None;
                         }
                     }
                     
                 for (value_idx, sample_idx) in (block_start..block_end).enumerate() {
-                    let amp = voice.velocity_sqrt * gain[value_idx] * voice_amp_envelope[value_idx];
+                    let amp = voice.velocity_sqrt * gain[value_idx] * voice_amp_envelope.get_value(sample_idx as f32);
 
                     // Generate waveform
                     let waveform = self.params.waveform.value();
@@ -552,11 +552,13 @@ impl Plugin for SubSynth {
                                 channel: voice.channel,
                                 note: voice.note,
                             });
-                            self.voices[voice_idx] = None;
+                                // Todo, terminate voice
                         }
                     }
                 }
             }
+
+
 
             block_start = block_end;
             block_end = (block_start + MAX_BLOCK_SIZE).min(num_samples);
@@ -590,7 +592,7 @@ impl SubSynth {
             phase: 0.0,
             phase_delta: 0.0,
             releasing: false,
-            amp_envelope: ADSREnvelope::new(0.0, 0.0, 0.0, 0.0),
+            amp_envelope: ADSREnvelope::new(self.params.amp_attack_ms.value(), self.params.amp_decay_ms.value(), self.params.amp_sustain_level.value(), self.params.amp_release_ms.value()),
     
             voice_gain: None,
             filter_cut_envelope: Smoother::new(SmoothingStyle::Linear(0.0)),
@@ -685,7 +687,7 @@ impl SubSynth {
                         channel,
                         note,
                     });
-                    *voice = None;
+                    //*voice = None;
 
                     if voice_id.is_some() {
                         return;
