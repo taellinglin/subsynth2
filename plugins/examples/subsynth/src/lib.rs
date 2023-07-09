@@ -121,10 +121,10 @@ impl Default for SubSynthParams {
             .with_string_to_value(formatters::s2v_f32_gain_to_db()),
             amp_attack_ms: FloatParam::new(
                 "Attack",
-                200.0,
+                0.0,
                 FloatRange::Skewed {
                     min: 0.0,
-                    max: 2000.0,
+                    max: 1.0,
                     factor: FloatRange::skew_factor(-1.0),
                 },
             )
@@ -132,10 +132,10 @@ impl Default for SubSynthParams {
             .with_unit(" ms"),
             amp_release_ms: FloatParam::new(
                 "Release",
-                100.0,
+                0.25,
                 FloatRange::Skewed {
                     min: 0.0,
-                    max: 2000.0,
+                    max: 1.0,
                     factor: FloatRange::skew_factor(-1.0),
                 },
             )
@@ -144,7 +144,7 @@ impl Default for SubSynthParams {
             waveform: EnumParam::new("Waveform", Waveform::Sine),
             amp_decay_ms: FloatParam::new(
                 "Decay",
-                200.0,
+                2000.0,
                 FloatRange::Skewed {
                     min: 0.0,
                     max: 2000.0,
@@ -155,10 +155,10 @@ impl Default for SubSynthParams {
             .with_unit(" ms"),
             amp_sustain_level: FloatParam::new(
                 "Sustain",
-                100.0,
+                1000.0,
                 FloatRange::Skewed {
-                    min: -100.0,
-                    max: 100.0,
+                    min: -1000.0,
+                    max: 1000.0,
                     factor: FloatRange::skew_factor(-1.0),
                 },
             )
@@ -178,8 +178,8 @@ impl Default for SubSynthParams {
                 "Filter Resonance",
                 0.0,
                 FloatRange::Linear {
-                    min: -1.0,
-                    max: 1.0,
+                    min: -1000.0,
+                    max: 1000.0,
                 },
             )
             .with_unit(" Q"),
@@ -196,7 +196,7 @@ impl Default for SubSynthParams {
             .with_unit(" ms"),
             filter_cut_decay_ms: FloatParam::new(
                 "Filter Cut Decay",
-                200.0,
+                2000.0,
                 FloatRange::Skewed {
                     min: 0.0,
                     max: 2000.0,
@@ -218,7 +218,7 @@ impl Default for SubSynthParams {
             .with_unit(" ms"),
             filter_cut_release_ms: FloatParam::new(
                 "Filter Cut Release",
-                100.0,
+                1000.0,
                 FloatRange::Skewed {
                     min: 0.0,
                     max: 2000.0,
@@ -229,7 +229,7 @@ impl Default for SubSynthParams {
             .with_unit(" ms"),
             filter_res_attack_ms: FloatParam::new(
                 "Filter Resonance Attack",
-                200.0,
+                2000.0,
                 FloatRange::Skewed {
                     min: 0.0,
                     max: 2000.0,
@@ -240,7 +240,7 @@ impl Default for SubSynthParams {
             .with_unit(" ms"),
             filter_res_decay_ms: FloatParam::new(
                 "Filter Resonance Decay",
-                200.0,
+                2000.0,
                 FloatRange::Skewed {
                     min: 0.0,
                     max: 2000.0,
@@ -355,13 +355,13 @@ impl Plugin for SubSynth {
                                 velocity,
                             } => {
                                 let initial_phase: f32 = self.prng.gen();
-                                let attack_time = self.params.amp_attack_ms.value() / 1000.0; // Convert attack time to seconds
-                                let release_time = self.params.amp_release_ms.value() / 1000.0; // Convert release time to seconds
-                                let decay_time = self.params.amp_decay_ms.value() / 1000.0; // Convert decay time to seconds
+                                let attack_time = self.params.amp_attack_ms.value(); // Convert attack time to seconds
+                                let release_time = self.params.amp_release_ms.value(); // Convert release time to seconds
+                                let decay_time = self.params.amp_decay_ms.value(); // Convert decay time to seconds
                                 let sustain_level = self.params.amp_sustain_level.value(); // Sustain level (between 0.0 and 1.0)
 
-                                let mut amp_envelope = ADSREnvelope::new(attack_time, decay_time, sustain_level, release_time);
-                                amp_envelope.trigger();
+                                let amp_envelope = ADSREnvelope::new(attack_time, decay_time, sustain_level, release_time);
+                                //amp_envelope.trigger();
 
                                 let voice = self.start_voice(context, timing, voice_id, channel, note);
                                 voice.velocity_sqrt = velocity.sqrt();
@@ -492,69 +492,82 @@ impl Plugin for SubSynth {
                         }
                     }
                     
-                for (value_idx, sample_idx) in (block_start..block_end).enumerate() {
-                    let amp = voice.velocity_sqrt * gain[value_idx] * voice_amp_envelope.get_value(sample_idx as f32);
-
-                    // Generate waveform
-                    let waveform = self.params.waveform.value();
-                    let generated_sample = generate_waveform(waveform, voice.phase) * amp;
-
-                    // Apply filter
-                    let filter_type = self.params.filter_type.value();
-                    let cutoff = self.params.filter_cut.value();
-                    let resonance = self.params.filter_res.value();
-                    let cutoff_attack = self.params.filter_cut_attack_ms.value();
-                    let cutoff_decay = self.params.filter_cut_decay_ms.value();
-                    let cutoff_sustain = self.params.filter_cut_sustain_ms.value();
-                    let cutoff_release = self.params.filter_cut_release_ms.value();
-                    let resonance_attack = self.params.filter_res_attack_ms.value();
-                    let resonance_decay = self.params.filter_res_decay_ms.value();
-                    let resonance_sustain = self.params.filter_res_sustain_ms.value();
-                    let resonance_release = self.params.filter_res_release_ms.value();
-
-                    let mut filtered_sample = generate_filter(
-                        filter_type,
-                        cutoff,
-                        resonance,
-                        cutoff_attack,
-                        cutoff_decay,
-                        cutoff_sustain,
-                        cutoff_release,
-                        resonance_attack,
-                        resonance_decay,
-                        resonance_sustain,
-                        resonance_release,
-                        generated_sample,
-                        sample_rate,
-                    );
-                    filtered_sample.set_sample_rate(sample_rate);
-                    let processed_sample = filtered_sample.process(generated_sample);
-
-                    // Update phase
-                    voice.phase += voice.phase_delta;
-                    if voice.phase >= 1.0 {
-                        voice.phase -= 1.0;
+                    for (value_idx, sample_idx) in (block_start..block_end).enumerate() {
+                        let envelope_time = voice_amp_envelope.get_time();
+                        let amp = voice.velocity_sqrt * gain[value_idx] * voice_amp_envelope.get_value(envelope_time);
+                        voice_amp_envelope.trigger();
+                    
+                        // Generate waveform
+                        let waveform = self.params.waveform.value();
+                        let mut generated_sample = generate_waveform(waveform, voice.phase);
+                    
+                        // Apply filter
+                        let filter_type = self.params.filter_type.value();
+                        let cutoff = self.params.filter_cut.value();
+                        let resonance = self.params.filter_res.value();
+                        let cutoff_attack = self.params.filter_cut_attack_ms.value();
+                        let cutoff_decay = self.params.filter_cut_decay_ms.value();
+                        let cutoff_sustain = self.params.filter_cut_sustain_ms.value();
+                        let cutoff_release = self.params.filter_cut_release_ms.value();
+                        let resonance_attack = self.params.filter_res_attack_ms.value();
+                        let resonance_decay = self.params.filter_res_decay_ms.value();
+                        let resonance_sustain = self.params.filter_res_sustain_ms.value();
+                        let resonance_release = self.params.filter_res_release_ms.value();
+                    
+                        let mut filtered_sample = generate_filter(
+                            filter_type,
+                            cutoff,
+                            resonance,
+                            cutoff_attack,
+                            cutoff_decay,
+                            cutoff_sustain,
+                            cutoff_release,
+                            resonance_attack,
+                            resonance_decay,
+                            resonance_sustain,
+                            resonance_release,
+                            generated_sample,
+                            sample_rate,
+                        );
+                        filtered_sample.set_sample_rate(sample_rate);
+                    
+                        // Apply envelope to each sample of the waveform
+                        for _ in 0..block_len {
+                            let processed_sample = filtered_sample.process(generated_sample);
+                    
+                            output[0][sample_idx] += processed_sample;
+                            output[1][sample_idx] += processed_sample;
+                    
+                            generated_sample = generated_sample * amp;
+                            voice.phase += voice.phase_delta;
+                            if voice.phase >= 1.0 {
+                                voice.phase -= 1.0;
+                            }
+                        }
                     }
-
-                    output[0][sample_idx] += processed_sample;
-                    output[1][sample_idx] += processed_sample;
-                }
+                    
             }
 
             // Process voice termination
+            let mut terminated_voices = Vec::new(); // Track the voices to terminate
             for (voice_idx, voice) in self.voices.iter_mut().enumerate() {
                 if let Some(voice) = voice {
-                    if let amp_envelope = &mut voice.amp_envelope {
-                        if amp_envelope.get_state() == ADSREnvelopeState::Idle && amp_envelope.previous_value() == 0.0 {
-                            context.send_event(NoteEvent::VoiceTerminated {
-                                timing: block_end as u32,
-                                voice_id: Some(voice.voice_id),
-                                channel: voice.channel,
-                                note: voice.note,
-                            });
-                                // Todo, terminate voice
-                        }
+                    if voice.amp_envelope.get_state() == ADSREnvelopeState::Idle {
+                        // Voice has reached the idle state
+                        terminated_voices.push(voice_idx);
                     }
+                }
+            }
+
+            // Terminate the voices outside the loop to avoid modifying the vector while iterating
+            for voice_idx in terminated_voices {
+                if let Some(voice) = self.voices[voice_idx].take() {
+                    context.send_event(NoteEvent::VoiceTerminated {
+                        timing: block_end as u32,
+                        voice_id: Some(voice.voice_id),
+                        channel: voice.channel,
+                        note: voice.note,
+                    });
                 }
             }
 
@@ -592,43 +605,49 @@ impl SubSynth {
             phase: 0.0,
             phase_delta: 0.0,
             releasing: false,
-            amp_envelope: ADSREnvelope::new(self.params.amp_attack_ms.value(), self.params.amp_decay_ms.value(), self.params.amp_sustain_level.value(), self.params.amp_release_ms.value()),
-    
+            amp_envelope: ADSREnvelope::new(
+                self.params.amp_attack_ms.value(),
+                self.params.amp_decay_ms.value(),
+                self.params.amp_sustain_level.value(),
+                self.params.amp_release_ms.value(),
+            ),
             voice_gain: None,
             filter_cut_envelope: Smoother::new(SmoothingStyle::Linear(0.0)),
             filter_res_envelope: Smoother::new(SmoothingStyle::Linear(0.0)),
     
-            filter: None,
+            filter: Some(self.params.filter_type.value()),
         };
+    
         self.next_internal_voice_id = self.next_internal_voice_id.wrapping_add(1);
     
-        match self.voices.iter().position(|voice| voice.is_none()) {
-            Some(free_voice_idx) => {
-                self.voices[free_voice_idx] = Some(new_voice);
-                return self.voices[free_voice_idx].as_mut().unwrap();
+        if let Some(free_voice_idx) = self.voices.iter().position(|voice| voice.is_none()) {
+            let voice = &mut self.voices[free_voice_idx];
+            if voice.is_none() {
+                *voice = Some(new_voice);
+                voice.as_mut().unwrap().amp_envelope.trigger();
             }
-            None => {
-                let oldest_voice = unsafe {
-                    self.voices
-                        .iter_mut()
-                        .min_by_key(|voice| voice.as_ref().unwrap_unchecked().internal_voice_id)
-                        .unwrap_unchecked()
-                };
-                {
-                    let oldest_voice = oldest_voice.as_ref().unwrap();
-                    context.send_event(NoteEvent::VoiceTerminated {
-                        timing: sample_offset,
-                        voice_id: Some(oldest_voice.voice_id),
-                        channel: oldest_voice.channel,
-                        note: oldest_voice.note,
-                    });
-                }
+            voice.as_mut().unwrap()
+        } else {
+            let oldest_voice = self
+                .voices
+                .iter_mut()
+                .min_by_key(|voice| voice.as_ref().unwrap().internal_voice_id)
+                .unwrap();
+            let oldest_voice = oldest_voice.as_mut().unwrap();
     
-                *oldest_voice = Some(new_voice);
-                return oldest_voice.as_mut().unwrap();
-            }
+            context.send_event(NoteEvent::VoiceTerminated {
+                timing: sample_offset,
+                voice_id: Some(oldest_voice.voice_id),
+                channel: oldest_voice.channel,
+                note: oldest_voice.note,
+            });
+    
+            *oldest_voice = new_voice;
+            oldest_voice
         }
     }
+    
+    
     
 
     fn start_release_for_voices(
@@ -639,28 +658,16 @@ impl SubSynth {
         note: u8,
     ) {
         for voice in self.voices.iter_mut() {
-            match voice {
-                Some(Voice {
-                    voice_id: candidate_voice_id,
-                    channel: candidate_channel,
-                    note: candidate_note,
-                    releasing,
-                    amp_envelope,
-                    ..
-                }) if voice_id == Some(*candidate_voice_id)
-                    || (channel == *candidate_channel && note == *candidate_note) =>
-                {
-                    *releasing = true;
-                    amp_envelope.set_release(self.params.amp_release_ms.value() / 1000.0); // Convert release time to seconds
-                    amp_envelope.release();
-                    if voice_id.is_some() {
-                        return;
-                    }
+            if let Some(voice) = voice {
+                if voice_id == Some(voice.voice_id) || (channel == voice.channel && note == voice.note) {
+                    voice.amp_envelope.release();
                 }
-                _ => (),
             }
         }
     }
+    
+
+    
     
 
     fn choke_voices(

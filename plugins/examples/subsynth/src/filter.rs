@@ -27,17 +27,20 @@ pub enum ADSREnvelopeState {
 
 
 impl ADSREnvelope {
+    
     pub fn new(attack: f32, decay: f32, sustain: f32, release: f32) -> Self {
         ADSREnvelope {
             attack,
             decay,
             sustain,
             release,
-            state: ADSREnvelopeState::Idle,
+            state: ADSREnvelopeState::Attack,
             time: 0.0,
         }
     }
-
+    pub fn get_time(&mut self) -> f32{
+        self.time
+    }
     pub fn set_attack(&mut self, attack: f32) {
         self.attack = attack;
     }
@@ -72,7 +75,12 @@ impl ADSREnvelope {
 impl Envelope for ADSREnvelope {
     fn get_value(&mut self, dt: f32) -> f32 {
         self.time += dt;
-        match self.state {
+        // Check if the envelope has completed and move to the next stage
+        if self.state != ADSREnvelopeState::Idle && self.time >= self.release {
+            self.state = ADSREnvelopeState::Idle;
+            self.time = 0.0;
+        }
+        let value = match self.state {
             ADSREnvelopeState::Idle => 0.0,
             ADSREnvelopeState::Attack => {
                 let attack_value = self.time / self.attack;
@@ -105,7 +113,15 @@ impl Envelope for ADSREnvelope {
                     release_value
                 }
             }
+        };
+
+        // Check if the envelope has completed and move to the next stage
+        if self.state != ADSREnvelopeState::Idle && self.time >= self.release {
+            self.state = ADSREnvelopeState::Idle;
+            self.time = 0.0;
         }
+
+        value
     }
 
     fn trigger(&mut self) {
@@ -117,6 +133,7 @@ impl Envelope for ADSREnvelope {
         self.state = ADSREnvelopeState::Release;
     }
 }
+
 
 
 
